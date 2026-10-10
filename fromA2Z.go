@@ -38,6 +38,11 @@ func main() {
 	var mailSubject string
 	var mailBody string
 	var appObjectId string
+	var guestEmail string
+	var guestName string
+	var redirectUrl string
+	var sendEmail bool
+	var customMessage string
 	reconCmd := flag.NewFlagSet("", flag.ExitOnError)
 	reconCmd.StringVar(&access_token, "a", "", "AccessToken")
 	reconCmd.StringVar(&servicePrincipal, "sp", "", "Service Principal ID")
@@ -55,6 +60,15 @@ func main() {
 	reconCmd.StringVar(&mailSubject, "subject", "", "Email subject")
 	reconCmd.StringVar(&mailBody, "body", "", "Email body (HTML supported)")
 	reconCmd.StringVar(&appObjectId, "app-id", "", "App Registration Object ID to target")
+	reconCmd.StringVar(&guestEmail, "email", "", "Guest email address to invite")
+	reconCmd.StringVar(&guestName, "name", "", "Display name for guest user")
+	reconCmd.StringVar(&redirectUrl, "redirect", "", "Redirect URL after invitation acceptance")
+	reconCmd.BoolVar(&sendEmail, "send-email", false, "Send invitation email to guest")
+	reconCmd.StringVar(&customMessage, "message", "", "Custom message for invitation email")
+	var guestJobTitle string
+	reconCmd.StringVar(&guestJobTitle, "jobtitle", "", "Set job title on guest user (for dynamic group testing)")
+	var checkPrivs bool
+	reconCmd.BoolVar(&checkPrivs, "check-privs", false, "Check group privileges (roles, app access, ownership)")
 	authCmd.StringVar(&clientID, "client-id", "d3590ed6-52b3-4102-aeff-aad2292ab01c", "Client ID, default value is for AZ Office Applications")
 	authCmd.StringVar(&clientID, "c", "d3590ed6-52b3-4102-aeff-aad2292ab01c", "Client ID, default value is for AZ Office Applications")
 	authCmd.StringVar(&tenantID, "tenant-id", "", "Tenant ID GUID or Tenant Name (bui.com)")
@@ -177,8 +191,13 @@ func main() {
 		recon.GetConditionalAccessPolicies(access_token, socks)
 	case "dynamicGroups":
 		reconCmd.Parse(os.Args[2:])
+		if helpAsked {
+			fmt.Println("Usage: fromA2Z dynamicGroups [-check-privs]")
+			fmt.Println("  -check-privs  Check each group for directory roles, app access, and ownership")
+			return
+		}
 		checkAuthForRecon(&access_token)
-		recon.FindDynamicGroups(access_token, socks)
+		recon.FindDynamicGroups(access_token, socks, checkPrivs)
 	case "applications":
 		reconCmd.Parse(os.Args[2:])
 		checkAuthForRecon(&access_token)
@@ -219,6 +238,30 @@ func main() {
 		reconCmd.Parse(os.Args[2:])
 		checkAuthForRecon(&access_token)
 		recon.GetCurrentUser(access_token)
+	case "users":
+		reconCmd.Parse(os.Args[2:])
+		if helpAsked {
+			fmt.Println("Usage: fromA2Z users [-user <upn or id>]")
+			fmt.Println("  If -user is specified, shows full details for that user")
+			fmt.Println("  If no user specified, enumerates all users and prompts for export format")
+			return
+		}
+		checkAuthForRecon(&access_token)
+		recon.GetUsers(access_token, userID, socks)
+	case "inviteGuest":
+		reconCmd.Parse(os.Args[2:])
+		if helpAsked {
+			fmt.Println("Usage: fromA2Z inviteGuest -email <guest@external.com> [options]")
+			fmt.Println("  -email       Guest email address (required)")
+			fmt.Println("  -name        Display name for the guest")
+			fmt.Println("  -jobtitle    Set job title on guest (test dynamic group membership)")
+			fmt.Println("  -redirect    URL to redirect after acceptance (default: myapps.microsoft.com)")
+			fmt.Println("  -send-email  Send invitation email to guest")
+			fmt.Println("  -message     Custom message for invitation email")
+			return
+		}
+		checkAuthForRecon(&access_token)
+		recon.InviteGuest(access_token, guestEmail, guestName, redirectUrl, sendEmail, customMessage, guestJobTitle, socks)
 	default:
 		fmt.Printf("Unknown command: %s\n", os.Args[1])
 		printUsage()
@@ -237,36 +280,88 @@ func checkAuthForRecon(access_token *string) {
 }
 
 func printUsage() {
-	fmt.Println("\nUsage: fromA2Z <command> [arguments]")
-	fmt.Println("\nAvailable commands:")
-	fmt.Println("  auth    - Authenticate to the service or refresh tokens")
-	fmt.Println(". pwned - Check for everything that your user owns")
-	fmt.Println("  servicePrincipals   - Check service principals with dangerous permissions")
-	fmt.Println("  sharePoint - Search Sharepoint")
-	fmt.Println("  storage - Check storage accounts for any containers or blobs with anonymous access")
-	fmt.Println("  dynamicGroups - Check all dynamic groups and their rules")
-	fmt.Println("  conditionalAccess - Check contiional access policies")
-	fmt.Println("  ARMDeployments - Check ARM deployments for any sensitive items")
-	fmt.Println("  administrativeUnits - See any administrative units and add users if you have access")
-	fmt.Println("  sendMail - If an application has the Mail.Send permission")
+	fmt.Println(`
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║                         fromA2Z - Azure Enumeration Tool                      ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
 
+Usage: fromA2Z <command> [options]
+
+AUTHENTICATION
+  auth                 Authenticate via device code, refresh token, or client secret
+  whoami               Display current token context and permissions
+
+ENUMERATION
+  users                Enumerate all users or search for a specific user
+  dynamicGroups        Find dynamic groups with exploitable membership rules
+  servicePrincipals    Discover service principals with dangerous permissions
+  applications         Find applications with risky permissions and their owners
+  administrativeUnits  Enumerate AUs and check for privilege escalation paths
+  conditionalAccess    Review conditional access policies
+
+DATA DISCOVERY
+  sharePoint           Search SharePoint for secrets and sensitive files
+  storage              Find storage accounts with anonymous access (requires subscription)
+  ARMDeployments       Check ARM deployments for exposed secrets (requires subscription)
+
+ACTIONS
+  pwned                Check everything your current user owns
+  sendMail             Send mail as a user (requires Mail.Send permission)
+  inviteGuest          Invite an external user as a B2B guest
+
+GLOBAL OPTIONS
+  -a <token>           Use a specific access token instead of auth file
+  -socks <port>        Route traffic through SOCKS5 proxy (127.0.0.1:<port>)
+  -h, -help            Show help for a specific command
+
+EXAMPLES
+  fromA2Z auth -device-code-auth -t contoso.com
+  fromA2Z users -user admin@contoso.com
+  fromA2Z dynamicGroups -check-privs
+  fromA2Z sharePoint -search "password Filetype:ps1" -n 50
+
+Run 'fromA2Z <command> -h' for more information on a command.
+`)
 }
 
 func printAuthUsage() {
-	fmt.Println("\n	-check		    Check if current authentication file (.fromA2Z_auth) works")
-	fmt.Println("	                    or if provided access token/refresh token works")
-	fmt.Println("	-client-id          Client-ID                  ")
-	fmt.Println("	-c                  ")
-	fmt.Println("	-scope              Scope (graph, azure management)  ")
-	fmt.Println("	-device-code-auth   Device Code Auth")
-	fmt.Println("	-tenant-id          Tenant ID (required with device code auth!)")
-	fmt.Println("	-t                  ")
-	fmt.Println("	-access-token       Access Token")
-	fmt.Println("	-a")
-	fmt.Println("	-refresh-token      Refresh Token")
-	fmt.Println("	-r")
-	fmt.Println("	-refresh            Refresh using auth file")
+	fmt.Println(`
+AUTHENTICATION METHODS
 
-	fmt.Println("	-help               Help Menu")
-	fmt.Println("	-h                  ")
+  Device Code Flow (interactive):
+    fromA2Z auth -device-code-auth -t <tenant>
+    fromA2Z auth -device-code-auth -t <tenant> -c <client-id> -scope <scope>
+
+  Refresh Token:
+    fromA2Z auth -refresh                           # Use stored refresh token
+    fromA2Z auth -r <refresh-token> -t <tenant>     # Use provided refresh token
+
+  Client Credentials (service principal):
+    fromA2Z auth -client-id <app-id> -client-secret <secret> -t <tenant>
+
+  Check Current Auth:
+    fromA2Z auth -check
+
+OPTIONS
+  -t, -tenant-id       Tenant ID or domain (e.g., contoso.com)
+  -c, -client-id       Application/Client ID (default: Microsoft Office)
+  -client-secret       Client secret for service principal auth
+  -scope               Token scope (default: https://graph.microsoft.com/.default)
+  -r                   Refresh token (for refresh token flow)
+  -device-code-auth    Use device code authentication flow
+  -refresh             Refresh using stored token from .fromA2Z_auth
+  -check               Verify current auth file is valid
+  -socks <port>        Route through SOCKS5 proxy
+
+COMMON CLIENT IDs
+  d3590ed6-52b3-4102-aeff-aad2292ab01c  Microsoft Office (default)
+  1fec8e78-bce4-4aaf-ab1b-5451cc387264  Microsoft Teams
+  04b07795-8ddb-461a-bbee-02f9e1bf7b46  Azure CLI
+  1950a258-227b-4e31-a9cf-717495945fc2  Azure PowerShell
+
+COMMON SCOPES
+  https://graph.microsoft.com/.default      Microsoft Graph (default)
+  https://management.azure.com/.default     Azure Resource Manager
+  https://vault.azure.net/.default          Azure Key Vault
+`)
 }
