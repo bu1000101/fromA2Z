@@ -1,10 +1,13 @@
 package recon
 
 import (
+	"bufio"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"regexp"
 	"strings"
 )
@@ -77,7 +80,7 @@ var adminOnlyButRisky = map[string]string{
 	"user.proxyaddresses":       "Can be modified via mail alias in some configs",
 }
 
-func FindDynamicGroups(access_token string, socks int, checkPrivs bool) {
+func FindDynamicGroups(access_token string, socks int, checkPrivs bool, outputFormat string) {
 	client := newHttpClient(socks)
 
 	fmt.Println("[*] Enumerating dynamic groups...")
@@ -165,9 +168,9 @@ func FindDynamicGroups(access_token string, socks int, checkPrivs bool) {
 
 	// Print HIGH risk first
 	if len(highRisk) > 0 {
-		fmt.Println("╔══════════════════════════════════════════════════════════════════╗")
-		fmt.Println("║  HIGH RISK - User-Editable Attributes in Membership Rules        ║")
-		fmt.Println("╚══════════════════════════════════════════════════════════════════╝")
+		fmt.Println("╔════════════════════════════════════════════════════════════════════════════════════════════════╗")
+		fmt.Println("║  HIGH RISK - User-Editable Attributes in Membership Rules                                      ║")
+		fmt.Println("╚════════════════════════════════════════════════════════════════════════════════════════════════╝")
 		for _, g := range highRisk {
 			printGroupDetails(g)
 		}
@@ -175,9 +178,9 @@ func FindDynamicGroups(access_token string, socks int, checkPrivs bool) {
 
 	// Print MEDIUM risk
 	if len(mediumRisk) > 0 {
-		fmt.Println("╔══════════════════════════════════════════════════════════════════╗")
-		fmt.Println("║  MEDIUM RISK - Potentially Exploitable Attributes                ║")
-		fmt.Println("╚══════════════════════════════════════════════════════════════════╝")
+		fmt.Println("╔════════════════════════════════════════════════════════════════════════════════════════════════╗")
+		fmt.Println("║  MEDIUM RISK - Potentially Exploitable Attributes                                              ║")
+		fmt.Println("╚════════════════════════════════════════════════════════════════════════════════════════════════╝")
 		for _, g := range mediumRisk {
 			printGroupDetails(g)
 		}
@@ -185,9 +188,9 @@ func FindDynamicGroups(access_token string, socks int, checkPrivs bool) {
 
 	// Print PAUSED groups
 	if len(paused) > 0 {
-		fmt.Println("╔══════════════════════════════════════════════════════════════════╗")
-		fmt.Println("║  PAUSED - Membership Processing Disabled (stale membership)      ║")
-		fmt.Println("╚══════════════════════════════════════════════════════════════════╝")
+		fmt.Println("╔════════════════════════════════════════════════════════════════════════════════════════════════╗")
+		fmt.Println("║  PAUSED - Membership Processing Disabled (stale membership)                                    ║")
+		fmt.Println("╚════════════════════════════════════════════════════════════════════════════════════════════════╝")
 		for _, g := range paused {
 			printGroupDetails(g)
 		}
@@ -195,12 +198,12 @@ func FindDynamicGroups(access_token string, socks int, checkPrivs bool) {
 
 	// Print LOW risk (summary only)
 	if len(lowRisk) > 0 {
-		fmt.Println("╔══════════════════════════════════════════════════════════════════╗")
-		fmt.Println("║  LOW RISK - No Obvious User-Controllable Attributes              ║")
-		fmt.Println("╚══════════════════════════════════════════════════════════════════╝")
+		fmt.Println("╔════════════════════════════════════════════════════════════════════════════════════════════════╗")
+		fmt.Println("║  LOW RISK - No Obvious User-Controllable Attributes                                            ║")
+		fmt.Println("╚════════════════════════════════════════════════════════════════════════════════════════════════╝")
 		for _, g := range lowRisk {
 			fmt.Printf("  • %s\n", g.DisplayName)
-			fmt.Printf("    Rule: %s\n\n", truncateRule(g.MembershipRule, 70))
+			fmt.Printf("    Rule: %s\n\n", truncateRule(g.MembershipRule, 90))
 		}
 	}
 
@@ -213,9 +216,9 @@ func FindDynamicGroups(access_token string, socks int, checkPrivs bool) {
 	}
 
 	// Summary
-	fmt.Println("\n══════════════════════════════════════════════════════════════════")
-	fmt.Println("                           SUMMARY")
-	fmt.Println("══════════════════════════════════════════════════════════════════")
+	fmt.Println("\n════════════════════════════════════════════════════════════════════════════════════════════════")
+	fmt.Println("                                            SUMMARY")
+	fmt.Println("════════════════════════════════════════════════════════════════════════════════════════════════")
 	fmt.Printf("  HIGH RISK:   %d groups (user-editable attributes)\n", len(highRisk))
 	fmt.Printf("  MEDIUM RISK: %d groups (potentially exploitable)\n", len(mediumRisk))
 	fmt.Printf("  PAUSED:      %d groups (stale membership)\n", len(paused))
@@ -223,7 +226,7 @@ func FindDynamicGroups(access_token string, socks int, checkPrivs bool) {
 	if privilegedCount > 0 {
 		fmt.Printf("  PRIVILEGED:  %d groups have roles/app access/ownership\n", privilegedCount)
 	}
-	fmt.Println("══════════════════════════════════════════════════════════════════")
+	fmt.Println("════════════════════════════════════════════════════════════════════════════════════════════════")
 
 	if len(highRisk) > 0 || len(mediumRisk) > 0 {
 		fmt.Println("\n[!] NEXT STEPS:")
@@ -231,6 +234,40 @@ func FindDynamicGroups(access_token string, socks int, checkPrivs bool) {
 		fmt.Println("    2. Try: PATCH https://graph.microsoft.com/v1.0/me")
 		fmt.Println("       Body: {\"jobTitle\": \"target-value\", \"department\": \"target-value\"}")
 		fmt.Println("    3. For on-prem synced tenants, check AD attribute permissions")
+	}
+
+	// Export handling
+	if len(allGroups) > 0 {
+		var format string
+		if outputFormat != "" {
+			// User specified format via flag
+			format = strings.TrimSpace(strings.ToLower(outputFormat))
+		} else {
+			// Prompt user after stdout display
+			reader := bufio.NewReader(os.Stdin)
+			fmt.Print("\nExport results? (csv/json/txt/all/n): ")
+			input, _ := reader.ReadString('\n')
+			format = strings.TrimSpace(strings.ToLower(input))
+		}
+
+		switch format {
+		case "csv":
+			exportDynamicGroupsCSV(allGroups)
+		case "json":
+			exportDynamicGroupsJSON(allGroups)
+		case "txt":
+			exportDynamicGroupsTXT(allGroups)
+		case "all":
+			exportDynamicGroupsCSV(allGroups)
+			exportDynamicGroupsJSON(allGroups)
+			exportDynamicGroupsTXT(allGroups)
+		case "n", "":
+			// skip
+		default:
+			if outputFormat != "" {
+				fmt.Printf("Unknown output format '%s'. Use: csv, json, txt, or all\n", outputFormat)
+			}
+		}
 	}
 }
 
@@ -270,27 +307,27 @@ func analyzeGroup(group *DynamicGroup) {
 }
 
 func printGroupDetails(g DynamicGroup) {
-	fmt.Println("┌──────────────────────────────────────────────────────────────────┐")
+	fmt.Println("┌────────────────────────────────────────────────────────────────────────────────────────────────┐")
 	fmt.Printf("│ %s\n", g.DisplayName)
-	fmt.Println("├──────────────────────────────────────────────────────────────────┤")
+	fmt.Println("├────────────────────────────────────────────────────────────────────────────────────────────────┤")
 	fmt.Printf("│ ID:      %s\n", g.ID)
 	if g.Description != "" {
-		fmt.Printf("│ Desc:    %s\n", truncateRule(g.Description, 55))
+		fmt.Printf("│ Desc:    %s\n", truncateRule(g.Description, 85))
 	}
 	fmt.Printf("│ State:   %s\n", g.MembershipRuleProcessingState)
 	fmt.Printf("│ Created: %s\n", g.CreatedDateTime)
-	fmt.Println("├──────────────────────────────────────────────────────────────────┤")
+	fmt.Println("├────────────────────────────────────────────────────────────────────────────────────────────────┤")
 	fmt.Println("│ MEMBERSHIP RULE:")
-	printWrappedRule(g.MembershipRule, 64)
+	printWrappedRule(g.MembershipRule, 94)
 	if len(g.VulnerableAttributes) > 0 {
-		fmt.Println("├──────────────────────────────────────────────────────────────────┤")
+		fmt.Println("├────────────────────────────────────────────────────────────────────────────────────────────────┤")
 		fmt.Println("│ [!] EXPLOITABLE ATTRIBUTES:")
 		for _, attr := range g.VulnerableAttributes {
 			fmt.Printf("│     → %s\n", attr)
 		}
 	}
 	if g.Privileges != nil && g.Privileges.HasPrivileges {
-		fmt.Println("├──────────────────────────────────────────────────────────────────┤")
+		fmt.Println("├────────────────────────────────────────────────────────────────────────────────────────────────┤")
 		fmt.Println("│ [★] PRIVILEGES:")
 		for _, role := range g.Privileges.DirectoryRoles {
 			fmt.Printf("│     ★ Directory Role: %s\n", role)
@@ -305,7 +342,7 @@ func printGroupDetails(g DynamicGroup) {
 			fmt.Printf("│     ○ Owns: %s\n", obj)
 		}
 	}
-	fmt.Println("└──────────────────────────────────────────────────────────────────┘")
+	fmt.Println("└────────────────────────────────────────────────────────────────────────────────────────────────┘")
 	fmt.Println()
 }
 
@@ -551,4 +588,113 @@ func getOwnedObjects(accessToken string, groupId string, client *http.Client) []
 	}
 
 	return objects
+}
+
+func exportDynamicGroupsCSV(groups []DynamicGroup) {
+	filename := "dynamicgroups_export.csv"
+	file, err := os.Create(filename)
+	if err != nil {
+		fmt.Println("Error creating file:", err)
+		return
+	}
+	defer file.Close()
+
+	writer := csv.NewWriter(file)
+	defer writer.Flush()
+
+	header := []string{
+		"DisplayName", "ID", "RiskLevel", "State", "MembershipRule",
+		"VulnerableAttributes", "DirectoryRoles", "AppAccess", "MemberOf", "Owns",
+	}
+	writer.Write(header)
+
+	for _, g := range groups {
+		vulnAttrs := ""
+		for _, a := range g.VulnerableAttributes {
+			vulnAttrs += a + "; "
+		}
+
+		dirRoles := ""
+		appAccess := ""
+		memberOf := ""
+		owns := ""
+		if g.Privileges != nil {
+			dirRoles = strings.Join(g.Privileges.DirectoryRoles, "; ")
+			appAccess = strings.Join(g.Privileges.AppRoleAssignments, "; ")
+			memberOf = strings.Join(g.Privileges.MemberOfGroups, "; ")
+			owns = strings.Join(g.Privileges.OwnsObjects, "; ")
+		}
+
+		row := []string{
+			g.DisplayName, g.ID, g.RiskLevel, g.MembershipRuleProcessingState,
+			g.MembershipRule, vulnAttrs, dirRoles, appAccess, memberOf, owns,
+		}
+		writer.Write(row)
+	}
+
+	fmt.Printf("[+] Exported %d groups to %s\n", len(groups), filename)
+}
+
+func exportDynamicGroupsJSON(groups []DynamicGroup) {
+	filename := "dynamicgroups_export.json"
+	file, err := os.Create(filename)
+	if err != nil {
+		fmt.Println("Error creating file:", err)
+		return
+	}
+	defer file.Close()
+
+	encoder := json.NewEncoder(file)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(groups); err != nil {
+		fmt.Println("Error writing JSON:", err)
+		return
+	}
+
+	fmt.Printf("[+] Exported %d groups to %s\n", len(groups), filename)
+}
+
+func exportDynamicGroupsTXT(groups []DynamicGroup) {
+	filename := "dynamicgroups_export.txt"
+	file, err := os.Create(filename)
+	if err != nil {
+		fmt.Println("Error creating file:", err)
+		return
+	}
+	defer file.Close()
+
+	for _, g := range groups {
+		file.WriteString("================================================================================\n")
+		file.WriteString(fmt.Sprintf("Name:        %s\n", g.DisplayName))
+		file.WriteString(fmt.Sprintf("ID:          %s\n", g.ID))
+		file.WriteString(fmt.Sprintf("Risk Level:  %s\n", g.RiskLevel))
+		file.WriteString(fmt.Sprintf("State:       %s\n", g.MembershipRuleProcessingState))
+		file.WriteString(fmt.Sprintf("Rule:        %s\n", g.MembershipRule))
+
+		if len(g.VulnerableAttributes) > 0 {
+			file.WriteString("\nExploitable Attributes:\n")
+			for _, a := range g.VulnerableAttributes {
+				file.WriteString(fmt.Sprintf("  - %s\n", a))
+			}
+		}
+
+		if g.Privileges != nil && g.Privileges.HasPrivileges {
+			file.WriteString("\nPrivileges:\n")
+			for _, r := range g.Privileges.DirectoryRoles {
+				file.WriteString(fmt.Sprintf("  [Role] %s\n", r))
+			}
+			for _, a := range g.Privileges.AppRoleAssignments {
+				file.WriteString(fmt.Sprintf("  [App] %s\n", a))
+			}
+			for _, m := range g.Privileges.MemberOfGroups {
+				file.WriteString(fmt.Sprintf("  [MemberOf] %s\n", m))
+			}
+			for _, o := range g.Privileges.OwnsObjects {
+				file.WriteString(fmt.Sprintf("  [Owns] %s\n", o))
+			}
+		}
+		file.WriteString("\n")
+	}
+
+	fmt.Printf("[+] Exported %d groups to %s\n", len(groups), filename)
 }

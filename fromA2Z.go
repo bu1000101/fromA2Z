@@ -69,6 +69,8 @@ func main() {
 	reconCmd.StringVar(&guestJobTitle, "jobtitle", "", "Set job title on guest user (for dynamic group testing)")
 	var checkPrivs bool
 	reconCmd.BoolVar(&checkPrivs, "check-privs", false, "Check group privileges (roles, app access, ownership)")
+	var outputFormat string
+	reconCmd.StringVar(&outputFormat, "output", "", "Export format: csv, json, txt, or all (default: stdout only)")
 	authCmd.StringVar(&clientID, "client-id", "d3590ed6-52b3-4102-aeff-aad2292ab01c", "Client ID, default value is for AZ Office Applications")
 	authCmd.StringVar(&clientID, "c", "d3590ed6-52b3-4102-aeff-aad2292ab01c", "Client ID, default value is for AZ Office Applications")
 	authCmd.StringVar(&tenantID, "tenant-id", "", "Tenant ID GUID or Tenant Name (bui.com)")
@@ -192,12 +194,41 @@ func main() {
 	case "dynamicGroups":
 		reconCmd.Parse(os.Args[2:])
 		if helpAsked {
-			fmt.Println("Usage: fromA2Z dynamicGroups [-check-privs]")
-			fmt.Println("  -check-privs  Check each group for directory roles, app access, and ownership")
+			fmt.Println(`
+DYNAMIC GROUPS - Find exploitable membership rules
+
+Usage: fromA2Z dynamicGroups [options]
+
+OPTIONS
+  -check-privs       Check each group for directory roles, app access, and ownership
+  -output <format>   Export to file: csv, json, txt, or all (default: stdout only)
+  -a <token>         Use specific access token
+  -socks <port>      Route through SOCKS5 proxy
+
+OUTPUT
+  Groups are categorized by risk level:
+    HIGH   - Uses user-editable attributes (jobTitle, department, displayName, etc.)
+    MEDIUM - Uses potentially exploitable attributes (extensionAttributes, employeeId)
+    PAUSED - Membership processing disabled (stale membership)
+    LOW    - No obvious user-controllable attributes
+
+  Results display to stdout by default. Use -output to also save to files.
+
+EXAMPLES
+  fromA2Z dynamicGroups                    # Basic scan
+  fromA2Z dynamicGroups -check-privs       # Include privilege enumeration
+
+ATTACK PATH
+  1. Find HIGH risk group with privileges
+  2. Check if you can edit your profile (PATCH /me)
+  3. Set attribute to match membership rule
+  4. Wait for dynamic group sync (~minutes)
+  5. Profit
+`)
 			return
 		}
 		checkAuthForRecon(&access_token)
-		recon.FindDynamicGroups(access_token, socks, checkPrivs)
+		recon.FindDynamicGroups(access_token, socks, checkPrivs, outputFormat)
 	case "applications":
 		reconCmd.Parse(os.Args[2:])
 		checkAuthForRecon(&access_token)
